@@ -17,15 +17,15 @@ app.add_middleware(
 
 # ─── Load Models & Scalers ─────────────────────────────────────
 heart_model = xgb.XGBClassifier()
-heart_model.load_model("models/Heart_xgboost_model.json")
-heart_scaler = joblib.load("models/Heart_scaler.joblib")
+heart_model.load_model("Heart_xgboost_model.json")
+heart_scaler = joblib.load("Heart_scaler.joblib")
 
 diabetes_model = xgb.XGBClassifier()
-diabetes_model.load_model("models/Diabetes_xgboost_model.json")
-diabetes_scaler = joblib.load("models/Diabetes_scaler.joblib")
+diabetes_model.load_model("Diabetes_xgboost_model.json")
+diabetes_scaler = joblib.load("Diabetes_scaler.joblib")
 
 hypertension_model = xgb.XGBClassifier()
-hypertension_model.load_model("models/hypertension_dataset_xgboost_model.json")
+hypertension_model.load_model("hypertension_dataset_xgboost_model.json")
 # No scaler for hypertension
 
 
