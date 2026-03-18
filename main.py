@@ -103,11 +103,9 @@ def predict_heart(data: HeartInput):
         data.MajorVessels, data.Thalassemia
     ]
     arr = np.array([features])
-    arr_scaled = heart_scaler.transform(arr)
-
-    prediction  = int(heart_model.predict(arr_scaled)[0])
-    probability = float(heart_model.predict_proba(arr_scaled)[0][1])
-    shap_vals   = get_shap(heart_model, arr_scaled, feature_names)
+    prediction  = int(heart_model.predict(arr)[0])
+    probability = float(heart_model.predict_proba(arr)[0][1])
+    shap_vals   = get_shap(heart_model, arr, feature_names)
 
     return {
         "disease": "Heart Disease",
