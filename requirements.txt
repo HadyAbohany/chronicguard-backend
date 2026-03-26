@@ -5,3 +5,4 @@ xgboost
 joblib
 numpy
 shap
+google-generativeai
