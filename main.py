@@ -1,10 +1,12 @@
-from fastapi import FastAPI, HTTPException
+import os
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import joblib
 import numpy as np
 import xgboost as xgb
 import shap
+import google.generativeai as genai
 
 app = FastAPI(title="Chronic Disease Prediction API")
 
@@ -15,7 +17,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─── Load Models & Scalers ─────────────────────────────────────
+# ─── تحميل الموديلز والـ Scalers ─────────────────────────────
 heart_model = xgb.XGBClassifier()
 heart_model.load_model("Heart_xgboost_model.json")
 heart_scaler = joblib.load("Heart_scaler.joblib")
@@ -26,54 +28,52 @@ diabetes_scaler = joblib.load("Diabetes_scaler.joblib")
 
 hypertension_model = xgb.XGBClassifier()
 hypertension_model.load_model("hypertension_dataset_xgboost_model.json")
-# No scaler for hypertension
 
 
 # ─── Schemas ──────────────────────────────────────────────────
 
-# Shared features (appear in 2+ models)
-class SharedFeatures(BaseModel):
-    Age: float
-    BMI: float
-    Glucose: float
-
 class HeartInput(BaseModel):
-    # Heart-specific (no overlap with shared page)
     Age: float
-    Gender: float           # 0 = Female, 1 = Male
-    ChestPainType: float    # 0-3
+    Gender: float
+    ChestPainType: float
     MaxHeartRate: float
-    ExerciseAngina: float   # 0 = No, 1 = Yes
+    ExerciseAngina: float
     ST_Depression: float
-    ST_Slope: float         # 0-2
-    MajorVessels: float     # 0-3
-    Thalassemia: float      # 0-3
+    ST_Slope: float
+    MajorVessels: float
+    Thalassemia: float
 
 class DiabetesInput(BaseModel):
-    # Shared
     Age: float
     BMI: float
     Glucose: float
-    # Diabetes-specific
     Pregnancies: float
     Insulin: float
     DiabetesPedigreeFunction: float
 
 class HypertensionInput(BaseModel):
-    # Shared
     Age: float
     BMI: float
     Glucose: float
-    # Hypertension-specific
     Cholesterol: float
     Systolic_BP: float
     Diastolic_BP: float
-    Smoking_Status: float          # 0 = No, 1 = Yes
-    Physical_Activity_Level: float # 0 = Low, 1 = Medium, 2 = High
-    Diabetes: float                # 0 = No, 1 = Yes
+    Smoking_Status: float
+    Physical_Activity_Level: float
+    Diabetes: float
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatInput(BaseModel):
+    message: str
+    history: list[ChatMessage]
+    results: dict
 
 
 # ─── SHAP Helper ──────────────────────────────────────────────
+
 def get_shap(model, arr, feature_names):
     try:
         explainer = shap.TreeExplainer(model)
@@ -81,14 +81,13 @@ def get_shap(model, arr, feature_names):
         if isinstance(shap_values, list):
             shap_values = shap_values[1]
         pairs = dict(zip(feature_names, [round(float(v), 4) for v in shap_values[0]]))
-        # Return top 3 by absolute value
         top3 = sorted(pairs.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
         return dict(top3)
-    except Exception as e:
+    except:
         return {}
 
 
-# ─── Endpoints ────────────────────────────────────────────────
+# ─── Endpoints التوقع ─────────────────────────────────────────
 
 @app.post("/predict/heart")
 def predict_heart(data: HeartInput):
@@ -103,10 +102,10 @@ def predict_heart(data: HeartInput):
         data.MajorVessels, data.Thalassemia
     ]
     arr = np.array([features])
-    prediction  = int(heart_model.predict(arr)[0])
-    probability = float(heart_model.predict_proba(arr)[0][1])
-    shap_vals   = get_shap(heart_model, arr, feature_names)
-
+    arr_scaled = heart_scaler.transform(arr)
+    prediction  = int(heart_model.predict(arr_scaled)[0])
+    probability = float(heart_model.predict_proba(arr_scaled)[0][1])
+    shap_vals   = get_shap(heart_model, arr_scaled, feature_names)
     return {
         "disease": "Heart Disease",
         "prediction": prediction,
@@ -127,11 +126,9 @@ def predict_diabetes(data: DiabetesInput):
     ]
     arr = np.array([features])
     arr_scaled = diabetes_scaler.transform(arr)
-
     prediction  = int(diabetes_model.predict(arr_scaled)[0])
     probability = float(diabetes_model.predict_proba(arr_scaled)[0][1])
     shap_vals   = get_shap(diabetes_model, arr_scaled, feature_names)
-
     return {
         "disease": "Diabetes",
         "prediction": prediction,
@@ -151,12 +148,9 @@ def predict_hypertension(data: HypertensionInput):
         data.Smoking_Status, data.Physical_Activity_Level, data.Diabetes, data.Glucose
     ]
     arr = np.array([features])
-    # No scaler for hypertension model
-
     prediction  = int(hypertension_model.predict(arr)[0])
     probability = float(hypertension_model.predict_proba(arr)[0][1])
     shap_vals   = get_shap(hypertension_model, arr, feature_names)
-
     return {
         "disease": "Hypertension",
         "prediction": prediction,
@@ -164,6 +158,72 @@ def predict_hypertension(data: HypertensionInput):
         "shap_values": shap_vals
     }
 
+
+# ─── Endpoint الـ Chatbot ─────────────────────────────────────
+
+@app.post("/chat")
+def chat(data: ChatInput):
+
+    # جيب الـ API Key من Railway Environment Variables
+    api_key = os.environ.get("GEMINI_API_KEY")
+    genai.configure(api_key=api_key)
+
+    # نتايج الأمراض
+    heart        = data.results.get("heart", {})
+    diabetes     = data.results.get("diabetes", {})
+    hypertension = data.results.get("hypertension", {})
+
+    # الـ System Prompt
+    system_prompt = f"""
+You are a friendly and professional medical AI assistant for ChronicGuard,
+an AI-powered chronic disease risk assessment system.
+
+The user just received these health risk results:
+
+Heart Disease Risk:    {heart.get("probability", "N/A")}%
+Top factors: {heart.get("shap_values", {})}
+
+Diabetes Risk:         {diabetes.get("probability", "N/A")}%
+Top factors: {diabetes.get("shap_values", {})}
+
+Hypertension Risk:     {hypertension.get("probability", "N/A")}%
+Top factors: {hypertension.get("shap_values", {})}
+
+Risk levels: Low = below 30%, Moderate = 30-60%, High = above 60%
+
+Rules:
+- Answer questions about the user's specific results only
+- Explain risk factors in simple non-technical language
+- Give practical lifestyle advice based on their results
+- Always recommend consulting a real doctor for medical decisions
+- Keep answers concise (under 120 words)
+- Be warm, supportive, and easy to understand
+- Respond in the SAME LANGUAGE the user writes in (Arabic or English)
+- Never diagnose — you assess risk, not diagnose disease
+"""
+
+    # تحويل تاريخ المحادثة للشكل اللي Gemini بيتوقعه
+    gemini_history = []
+    for msg in data.history:
+        gemini_role = "user" if msg.role == "user" else "model"
+        gemini_history.append({
+            "role": gemini_role,
+            "parts": [msg.content]
+        })
+
+    # إنشاء الموديل وبدء المحادثة
+    model = genai.GenerativeModel(
+        model_name="gemini-1.5-flash",
+        system_instruction=system_prompt
+    )
+
+    chat_session = model.start_chat(history=gemini_history)
+    response = chat_session.send_message(data.message)
+
+    return {"reply": response.text}
+
+
+# ─── Root ─────────────────────────────────────────────────────
 
 @app.get("/")
 def root():
