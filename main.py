@@ -2,6 +2,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import List, Optional
 import joblib
 import numpy as np
 import xgboost as xgb
@@ -62,14 +63,15 @@ class HypertensionInput(BaseModel):
     Physical_Activity_Level: float
     Diabetes: float
 
+# استخدام List من typing بدل list[] عشان يشتغل على كل Python versions
 class ChatMessage(BaseModel):
     role: str
     content: str
 
 class ChatInput(BaseModel):
     message: str
-    history: list[ChatMessage]
-    results: dict
+    history: List[ChatMessage]  # ← التعديل هنا
+    results: Optional[dict] = {}  # ← Optional عشان لو الفرونت مابعتهوش
 
 
 # ─── SHAP Helper ──────────────────────────────────────────────
@@ -163,64 +165,65 @@ def predict_hypertension(data: HypertensionInput):
 
 @app.post("/chat")
 def chat(data: ChatInput):
+    try:
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            return {"reply": "API key not configured."}
 
-    # جيب الـ API Key من Railway Environment Variables
-    api_key = os.environ.get("GEMINI_API_KEY")
-    genai.configure(api_key=api_key)
+        genai.configure(api_key=api_key)
 
-    # نتايج الأمراض
-    heart        = data.results.get("heart", {})
-    diabetes     = data.results.get("diabetes", {})
-    hypertension = data.results.get("hypertension", {})
+        heart        = data.results.get("heart", {}) if data.results else {}
+        diabetes     = data.results.get("diabetes", {}) if data.results else {}
+        hypertension = data.results.get("hypertension", {}) if data.results else {}
 
-    # الـ System Prompt
-    system_prompt = f"""
-You are a friendly and professional medical AI assistant for ChronicGuard,
-an AI-powered chronic disease risk assessment system.
+        system_prompt = f"""
+You are a friendly and professional medical AI assistant for ChronicGuard.
 
-The user just received these health risk results:
+The user's health risk results:
+- Heart Disease Risk: {heart.get("probability", "N/A")}%
+  Top factors: {heart.get("shap_values", {})}
 
-Heart Disease Risk:    {heart.get("probability", "N/A")}%
-Top factors: {heart.get("shap_values", {})}
+- Diabetes Risk: {diabetes.get("probability", "N/A")}%
+  Top factors: {diabetes.get("shap_values", {})}
 
-Diabetes Risk:         {diabetes.get("probability", "N/A")}%
-Top factors: {diabetes.get("shap_values", {})}
-
-Hypertension Risk:     {hypertension.get("probability", "N/A")}%
-Top factors: {hypertension.get("shap_values", {})}
+- Hypertension Risk: {hypertension.get("probability", "N/A")}%
+  Top factors: {hypertension.get("shap_values", {})}
 
 Risk levels: Low = below 30%, Moderate = 30-60%, High = above 60%
 
 Rules:
-- Answer questions about the user's specific results only
+- Answer questions about the user's results only
 - Explain risk factors in simple non-technical language
-- Give practical lifestyle advice based on their results
-- Always recommend consulting a real doctor for medical decisions
-- Keep answers concise (under 120 words)
-- Be warm, supportive, and easy to understand
+- Give practical lifestyle advice
+- Always recommend consulting a real doctor
+- Keep answers under 120 words
+- Be warm and supportive
 - Respond in the SAME LANGUAGE the user writes in (Arabic or English)
-- Never diagnose — you assess risk, not diagnose disease
+- Never diagnose — you assess risk only
 """
 
-    # تحويل تاريخ المحادثة للشكل اللي Gemini بيتوقعه
-    gemini_history = []
-    for msg in data.history:
-        gemini_role = "user" if msg.role == "user" else "model"
-        gemini_history.append({
-            "role": gemini_role,
-            "parts": [msg.content]
-        })
+        # تحويل الـ history للشكل الصح
+        gemini_history = []
+        for msg in data.history:
+            gemini_role = "user" if msg.role == "user" else "model"
+            gemini_history.append({
+                "role": gemini_role,
+                "parts": [msg.content]
+            })
 
-    # إنشاء الموديل وبدء المحادثة
-    model = genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
-        system_instruction=system_prompt
-    )
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            system_instruction=system_prompt
+        )
 
-    chat_session = model.start_chat(history=gemini_history)
-    response = chat_session.send_message(data.message)
+        chat_session = model.start_chat(history=gemini_history)
+        response = chat_session.send_message(data.message)
 
-    return {"reply": response.text}
+        return {"reply": response.text}
+
+    except Exception as e:
+        # بنرجع الـ error الحقيقي عشان نعرف المشكلة
+        return {"reply": f"Error: {str(e)}"}
 
 
 # ─── Root ─────────────────────────────────────────────────────
