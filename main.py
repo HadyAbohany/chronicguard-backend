@@ -212,7 +212,7 @@ Rules:
             })
 
         model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
+            model_name="gemini-flash-latest",
             system_instruction=system_prompt
         )
 
